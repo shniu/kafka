@@ -66,9 +66,9 @@ class ReassignPartitionsClusterTest extends ZooKeeperTestHarness with Logging {
     JAdminClient.create(props)
   }
 
-  def getRandomLogDirAssignment(brokerId: Int): String = {
+  def getRandomLogDirAssignment(brokerId: Int, excluded: Option[String] = None): String = {
     val server = servers.find(_.config.brokerId == brokerId).get
-    val logDirs = server.config.logDirs
+    val logDirs = server.config.logDirs.filterNot(excluded.contains)
     new File(logDirs(Random.nextInt(logDirs.size))).getAbsolutePath
   }
 
@@ -134,18 +134,33 @@ class ReassignPartitionsClusterTest extends ZooKeeperTestHarness with Logging {
   }
 
   @Test
-  def shouldMoveSinglePartitionWithinBroker() {
+  def shouldMoveSinglePartitionToSameFolderWithinBroker(): Unit = shouldMoveSinglePartitionWithinBroker(true)
+
+  @Test
+  def shouldMoveSinglePartitionToDifferentFolderWithinBroker(): Unit = shouldMoveSinglePartitionWithinBroker(false)
+
+  def shouldMoveSinglePartitionWithinBroker(moveToSameFolder: Boolean): Unit = {
     // Given a single replica on server 100
     startBrokers(Seq(100, 101))
     adminClient = createAdminClient(servers)
-    val expectedLogDir = getRandomLogDirAssignment(100)
     createTopic(zkClient, topicName, Map(0 -> Seq(100)), servers = servers)
+
+    val replica = new TopicPartitionReplica(topicName, 0, 100)
+    val currentLogDir = adminClient.describeReplicaLogDirs(java.util.Collections.singleton(replica))
+      .all()
+      .get()
+      .get(replica)
+      .getCurrentReplicaLogDir
+
+    val expectedLogDir = if (moveToSameFolder)
+      currentLogDir
+    else
+      getRandomLogDirAssignment(100, excluded = Some(currentLogDir))
 
     // When we execute an assignment that moves an existing replica to another log directory on the same broker
     val topicJson: String = s"""{"version":1,"partitions":[{"topic":"$topicName","partition":0,"replicas":[100],"log_dirs":["$expectedLogDir"]}]}"""
     ReassignPartitionsCommand.executeAssignment(zkClient, Some(adminClient), topicJson, NoThrottle)
-    val replica = new TopicPartitionReplica(topicName, 0, 100)
-    TestUtils.waitUntilTrue(() => {
+    waitUntilTrue(() => {
       expectedLogDir == adminClient.describeReplicaLogDirs(Collections.singleton(replica)).all().get.get(replica).getCurrentReplicaLogDir
     }, "Partition should have been moved to the expected log directory", 1000)
   }
@@ -628,9 +643,50 @@ class ReassignPartitionsClusterTest extends ZooKeeperTestHarness with Logging {
     assertEquals(Seq.empty, zkClient.getReplicasForPartition(new TopicPartition("customers", 0)))
   }
 
+  @Test
+  def testProduceAndConsumeWithReassignmentInProgress(): Unit = {
+    val tp0 = new TopicPartition(topicName, 0)
+
+    startBrokers(Seq(100, 101))
+    adminClient = createAdminClient(servers)
+    createTopic(zkClient, topicName, Map(tp0.partition() -> Seq(100)), servers = servers)
+
+    produceMessages(tp0.topic, 500, acks = -1, valueLength = 100 * 1000)
+
+    val command = new ReassignPartitionsCommand(zkClient, None,
+      Map(tp0 -> Seq(100, 101)),
+      adminZkClient = adminZkClient)
+    command.reassignPartitions(Throttle(interBrokerLimit = 1, -1))
+
+    awaitReassignmentInProgress(tp0)
+
+    produceMessages(tp0.topic, 500, acks = -1, valueLength = 64)
+    val consumer = TestUtils.createConsumer(TestUtils.getBrokerListStrFromServers(servers))
+    try {
+      consumer.assign(Seq(tp0).asJava)
+      pollUntilAtLeastNumRecords(consumer, numRecords = 1000)
+    } finally {
+      consumer.close()
+    }
+
+    command.maybeLimit(Throttle(interBrokerLimit = Int.MaxValue, -1))
+
+    waitForReassignmentToComplete()
+    assertEquals(Seq(100, 101), zkClient.getReplicasForPartition(tp0))
+  }
+
   def waitForReassignmentToComplete(pause: Long = 100L) {
     waitUntilTrue(() => !zkClient.reassignPartitionsInProgress,
       s"Znode ${ReassignPartitionsZNode.path} wasn't deleted", pause = pause)
+  }
+
+  def awaitReassignmentInProgress(topicPartition: TopicPartition): Unit = {
+    waitUntilTrue(() => isAssignmentInProgress(topicPartition),
+      "Timed out waiting for expected reassignment to begin")
+  }
+
+  def isAssignmentInProgress(topicPartition: TopicPartition): Boolean = {
+    zkClient.getPartitionReassignment.contains(topicPartition)
   }
 
   def json(topic: String*): String = {

@@ -1251,6 +1251,43 @@ public class KafkaAdminClientTest {
     }
 
     @Test
+    public void testDescribeNonConsumerGroups() throws Exception {
+        final HashMap<Integer, Node> nodes = new HashMap<>();
+        nodes.put(0, new Node(0, "localhost", 8121));
+
+        final Cluster cluster =
+            new Cluster(
+                "mockClusterId",
+                nodes.values(),
+                Collections.<PartitionInfo>emptyList(),
+                Collections.<String>emptySet(),
+                Collections.<String>emptySet(), nodes.get(0));
+
+        try (AdminClientUnitTestEnv env = new AdminClientUnitTestEnv(cluster)) {
+            env.kafkaClient().setNodeApiVersions(NodeApiVersions.create());
+
+            env.kafkaClient().prepareResponse(prepareFindCoordinatorResponse(Errors.NONE, env.cluster().controller()));
+
+            DescribeGroupsResponseData data = new DescribeGroupsResponseData();
+
+            data.groups().add(DescribeGroupsResponse.groupMetadata(
+                "group-0",
+                Errors.NONE,
+                "",
+                "non-consumer",
+                "",
+                asList(),
+                Collections.emptySet()));
+
+            env.kafkaClient().prepareResponse(new DescribeGroupsResponse(data));
+
+            final DescribeConsumerGroupsResult result = env.adminClient().describeConsumerGroups(singletonList("group-0"));
+
+            TestUtils.assertFutureError(result.describedGroups().get("group-0"), IllegalArgumentException.class);
+        }
+    }
+
+    @Test
     public void testDescribeConsumerGroupOffsets() throws Exception {
         final HashMap<Integer, Node> nodes = new HashMap<>();
         nodes.put(0, new Node(0, "localhost", 8121));
@@ -1278,6 +1315,7 @@ public class KafkaAdminClientTest {
             TopicPartition myTopicPartition0 = new TopicPartition("my_topic", 0);
             TopicPartition myTopicPartition1 = new TopicPartition("my_topic", 1);
             TopicPartition myTopicPartition2 = new TopicPartition("my_topic", 2);
+            TopicPartition myTopicPartition3 = new TopicPartition("my_topic", 3);
 
             final Map<TopicPartition, OffsetFetchResponse.PartitionData> responseData = new HashMap<>();
             responseData.put(myTopicPartition0, new OffsetFetchResponse.PartitionData(10,
@@ -1286,15 +1324,19 @@ public class KafkaAdminClientTest {
                     Optional.empty(), "", Errors.NONE));
             responseData.put(myTopicPartition2, new OffsetFetchResponse.PartitionData(20,
                     Optional.empty(), "", Errors.NONE));
+            responseData.put(myTopicPartition3, new OffsetFetchResponse.PartitionData(OffsetFetchResponse.INVALID_OFFSET,
+                    Optional.empty(), "", Errors.NONE));
             env.kafkaClient().prepareResponse(new OffsetFetchResponse(Errors.NONE, responseData));
 
             final ListConsumerGroupOffsetsResult result = env.adminClient().listConsumerGroupOffsets("group-0");
             final Map<TopicPartition, OffsetAndMetadata> partitionToOffsetAndMetadata = result.partitionsToOffsetAndMetadata().get();
 
-            assertEquals(3, partitionToOffsetAndMetadata.size());
+            assertEquals(4, partitionToOffsetAndMetadata.size());
             assertEquals(10, partitionToOffsetAndMetadata.get(myTopicPartition0).offset());
             assertEquals(0, partitionToOffsetAndMetadata.get(myTopicPartition1).offset());
             assertEquals(20, partitionToOffsetAndMetadata.get(myTopicPartition2).offset());
+            assertTrue(partitionToOffsetAndMetadata.containsKey(myTopicPartition3));
+            assertNull(partitionToOffsetAndMetadata.get(myTopicPartition3));
         }
     }
 

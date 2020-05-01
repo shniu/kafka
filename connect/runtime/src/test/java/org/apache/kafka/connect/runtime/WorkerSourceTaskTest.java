@@ -35,9 +35,9 @@ import org.apache.kafka.connect.runtime.standalone.StandaloneConfig;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
 import org.apache.kafka.connect.source.SourceTaskContext;
+import org.apache.kafka.connect.storage.CloseableOffsetStorageReader;
 import org.apache.kafka.connect.storage.Converter;
 import org.apache.kafka.connect.storage.HeaderConverter;
-import org.apache.kafka.connect.storage.OffsetStorageReader;
 import org.apache.kafka.connect.storage.OffsetStorageWriter;
 import org.apache.kafka.connect.util.Callback;
 import org.apache.kafka.connect.util.ConnectorTaskId;
@@ -77,6 +77,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 @PowerMockIgnore({"javax.management.*",
+                  "org.apache.log4j.*",
                   "org.apache.kafka.connect.runtime.isolation.*"})
 @RunWith(PowerMockRunner.class)
 public class WorkerSourceTaskTest extends ThreadedTest {
@@ -106,7 +107,7 @@ public class WorkerSourceTaskTest extends ThreadedTest {
     @Mock private HeaderConverter headerConverter;
     @Mock private TransformationChain<SourceRecord> transformationChain;
     @Mock private KafkaProducer<byte[], byte[]> producer;
-    @Mock private OffsetStorageReader offsetReader;
+    @Mock private CloseableOffsetStorageReader offsetReader;
     @Mock private OffsetStorageWriter offsetWriter;
     @Mock private ClusterConfigState clusterConfigState;
     private WorkerSourceTask workerTask;
@@ -330,6 +331,51 @@ public class WorkerSourceTaskTest extends ThreadedTest {
         Future<?> taskFuture = executor.submit(workerTask);
 
         assertTrue(awaitLatch(pollLatch));
+        workerTask.stop();
+        assertTrue(workerTask.awaitStop(1000));
+
+        taskFuture.get();
+        assertPollMetrics(0);
+
+        PowerMock.verifyAll();
+    }
+
+    @Test
+    public void testPollReturnsNoRecords() throws Exception {
+        // Test that the task handles an empty list of records
+        createWorkerTask();
+
+        sourceTask.initialize(EasyMock.anyObject(SourceTaskContext.class));
+        EasyMock.expectLastCall();
+        sourceTask.start(TASK_PROPS);
+        EasyMock.expectLastCall();
+        statusListener.onStartup(taskId);
+        EasyMock.expectLastCall();
+
+        // We'll wait for some data, then trigger a flush
+        final CountDownLatch pollLatch = expectEmptyPolls(1, new AtomicInteger());
+        expectOffsetFlush(true);
+
+        sourceTask.stop();
+        EasyMock.expectLastCall();
+        expectOffsetFlush(true);
+
+        statusListener.onShutdown(taskId);
+        EasyMock.expectLastCall();
+
+        producer.close(EasyMock.anyObject(Duration.class));
+        EasyMock.expectLastCall();
+
+        transformationChain.close();
+        EasyMock.expectLastCall();
+
+        PowerMock.replayAll();
+
+        workerTask.initialize(TASK_CONFIG);
+        Future<?> taskFuture = executor.submit(workerTask);
+
+        assertTrue(awaitLatch(pollLatch));
+        assertTrue(workerTask.commitOffsets());
         workerTask.stop();
         assertTrue(workerTask.awaitStop(1000));
 
@@ -637,6 +683,20 @@ public class WorkerSourceTaskTest extends ThreadedTest {
     }
 
     @Test
+    public void testCancel() {
+        createWorkerTask();
+
+        offsetReader.close();
+        PowerMock.expectLastCall();
+
+        PowerMock.replayAll();
+
+        workerTask.cancel();
+
+        PowerMock.verifyAll();
+    }
+
+    @Test
     public void testMetricsGroup() {
         SourceTaskMetricsGroup group = new SourceTaskMetricsGroup(taskId, metrics);
         SourceTaskMetricsGroup group1 = new SourceTaskMetricsGroup(taskId1, metrics);
@@ -680,6 +740,24 @@ public class WorkerSourceTaskTest extends ThreadedTest {
         assertEquals(6.667, metrics.currentMetricValueAsDouble(group1.metricGroup(), "source-record-write-rate"), 0.001d);
         assertEquals(200, metrics.currentMetricValueAsDouble(group1.metricGroup(), "source-record-write-total"), 0.001d);
         assertEquals(1800.0, metrics.currentMetricValueAsDouble(group1.metricGroup(), "source-record-active-count"), 0.001d);
+    }
+
+    private CountDownLatch expectEmptyPolls(int minimum, final AtomicInteger count) throws InterruptedException {
+        final CountDownLatch latch = new CountDownLatch(minimum);
+        // Note that we stub these to allow any number of calls because the thread will continue to
+        // run. The count passed in + latch returned just makes sure we get *at least* that number of
+        // calls
+        EasyMock.expect(sourceTask.poll())
+                .andStubAnswer(new IAnswer<List<SourceRecord>>() {
+                    @Override
+                    public List<SourceRecord> answer() throws Throwable {
+                        count.incrementAndGet();
+                        latch.countDown();
+                        Thread.sleep(10);
+                        return Collections.emptyList();
+                    }
+                });
+        return latch;
     }
 
     private CountDownLatch expectPolls(int minimum, final AtomicInteger count) throws InterruptedException {

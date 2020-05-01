@@ -333,7 +333,7 @@ class Log(@volatile var dir: File,
     },
     tags)
 
-  scheduler.schedule(name = "PeriodicProducerExpirationCheck", fun = () => {
+  val producerExpireCheck = scheduler.schedule(name = "PeriodicProducerExpirationCheck", fun = () => {
     lock synchronized {
       producerStateManager.removeExpiredProducers(time.milliseconds)
     }
@@ -762,6 +762,7 @@ class Log(@volatile var dir: File,
     debug("Closing log")
     lock synchronized {
       checkIfMemoryMappedBufferClosed()
+      producerExpireCheck.cancel(true)
       maybeHandleIOException(s"Error while renaming dir for $topicPartition in dir ${dir.getParent}") {
         // We take a snapshot at the last written offset to hopefully avoid the need to scan the log
         // after restarting and to ensure that we cannot inadvertently hit the upgrade optimization
@@ -1797,6 +1798,7 @@ class Log(@volatile var dir: File,
       lock synchronized {
         checkIfMemoryMappedBufferClosed()
         removeLogMetrics()
+        producerExpireCheck.cancel(true)
         logSegments.foreach(_.deleteIfExists())
         segments.clear()
         leaderEpochCache.foreach(_.clear())
@@ -1918,8 +1920,8 @@ class Log(@volatile var dir: File,
     lock synchronized {
       val view = Option(segments.floorKey(from)).map { floor =>
         if (to < floor)
-          throw new IllegalArgumentException(s"Invalid log segment range: requested segments from offset $from " +
-            s"mapping to segment with base offset $floor, which is greater than limit offset $to")
+          throw new IllegalArgumentException(s"Invalid log segment range: requested segments in $topicPartition " +
+            s"from offset $from mapping to segment with base offset $floor, which is greater than limit offset $to")
         segments.subMap(floor, to)
       }.getOrElse(segments.headMap(to))
       view.values.asScala
@@ -1929,9 +1931,9 @@ class Log(@volatile var dir: File,
   def nonActiveLogSegmentsFrom(from: Long): Iterable[LogSegment] = {
     lock synchronized {
       if (from > activeSegment.baseOffset)
-        throw new IllegalArgumentException("Illegal request for non-active segments beginning at " +
-          s"offset $from, which is larger than the active segment's base offset ${activeSegment.baseOffset}")
-      logSegments(from, activeSegment.baseOffset)
+        Seq.empty
+      else
+        logSegments(from, activeSegment.baseOffset)
     }
   }
 

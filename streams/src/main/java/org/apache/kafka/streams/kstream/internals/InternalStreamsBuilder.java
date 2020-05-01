@@ -42,6 +42,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -378,13 +379,16 @@ public class InternalStreamsBuilder implements InternalNameProvider {
 
     private void maybeUpdateKeyChangingRepartitionNodeMap() {
         final Map<StreamsGraphNode, Set<StreamsGraphNode>> mergeNodesToKeyChangers = new HashMap<>();
+        final Set<StreamsGraphNode> mergeNodeKeyChangingParentsToRemove = new HashSet<>();
         for (final StreamsGraphNode mergeNode : mergeNodes) {
             mergeNodesToKeyChangers.put(mergeNode, new LinkedHashSet<>());
-            final Collection<StreamsGraphNode> keys = keyChangingOperationsToOptimizableRepartitionNodes.keySet();
-            for (final StreamsGraphNode key : keys) {
-                final StreamsGraphNode maybeParentKey = findParentNodeMatching(mergeNode, node -> node.parentNodes().contains(key));
-                if (maybeParentKey != null) {
-                    mergeNodesToKeyChangers.get(mergeNode).add(key);
+            final Set<Map.Entry<StreamsGraphNode, LinkedHashSet<OptimizableRepartitionNode>>> entrySet = keyChangingOperationsToOptimizableRepartitionNodes.entrySet();
+            for (final Map.Entry<StreamsGraphNode, LinkedHashSet<OptimizableRepartitionNode>> entry : entrySet) {
+                if (mergeNodeHasRepartitionChildren(mergeNode, entry.getValue())) {
+                    final StreamsGraphNode maybeParentKey = findParentNodeMatching(mergeNode, node -> node.parentNodes().contains(entry.getKey()));
+                    if (maybeParentKey != null) {
+                        mergeNodesToKeyChangers.get(mergeNode).add(entry.getKey());
+                    }
                 }
             }
         }
@@ -395,11 +399,19 @@ public class InternalStreamsBuilder implements InternalNameProvider {
             final LinkedHashSet<OptimizableRepartitionNode> repartitionNodes = new LinkedHashSet<>();
             for (final StreamsGraphNode keyChangingParent : keyChangingParents) {
                 repartitionNodes.addAll(keyChangingOperationsToOptimizableRepartitionNodes.get(keyChangingParent));
-                keyChangingOperationsToOptimizableRepartitionNodes.remove(keyChangingParent);
+                mergeNodeKeyChangingParentsToRemove.add(keyChangingParent);
             }
-
             keyChangingOperationsToOptimizableRepartitionNodes.put(mergeKey, repartitionNodes);
         }
+
+        for (final StreamsGraphNode mergeNodeKeyChangingParent : mergeNodeKeyChangingParentsToRemove) {
+            keyChangingOperationsToOptimizableRepartitionNodes.remove(mergeNodeKeyChangingParent);
+        }
+    }
+
+    private boolean mergeNodeHasRepartitionChildren(final StreamsGraphNode mergeNode,
+                                                    final LinkedHashSet<OptimizableRepartitionNode> repartitionNodes) {
+        return repartitionNodes.stream().allMatch(n -> findParentNodeMatching(n, gn -> gn.parentNodes().contains(mergeNode)) != null);
     }
 
     @SuppressWarnings("unchecked")

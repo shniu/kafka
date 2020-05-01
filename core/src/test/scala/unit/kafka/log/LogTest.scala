@@ -355,6 +355,7 @@ class LogTest {
     assertEquals(0 until 5, nonActiveBaseOffsetsFrom(0L))
     assertEquals(Seq.empty, nonActiveBaseOffsetsFrom(5L))
     assertEquals(2 until 5, nonActiveBaseOffsetsFrom(2L))
+    assertEquals(Seq.empty, nonActiveBaseOffsetsFrom(6L))
   }
 
   @Test
@@ -370,6 +371,30 @@ class LogTest {
 
     assertThrows[IllegalArgumentException] {
       log.logSegments(5, 1)
+    }
+  }
+
+  /**
+   * Test that "PeriodicProducerExpirationCheck" scheduled task gets canceled after log
+   * is deleted.
+   */
+  @Test
+  def testProducerExpireCheckAfterDelete(): Unit = {
+    val scheduler = new KafkaScheduler(1)
+    try {
+      scheduler.startup()
+      val logConfig = LogTest.createLogConfig()
+      val log = createLog(logDir, logConfig, scheduler = scheduler)
+
+      val producerExpireCheck = log.producerExpireCheck
+      assertTrue("producerExpireCheck isn't as part of scheduled tasks",
+        scheduler.taskRunning(producerExpireCheck))
+
+      log.delete()
+      assertFalse("producerExpireCheck is part of scheduled tasks even after log deletion",
+        scheduler.taskRunning(producerExpireCheck))
+    } finally {
+      scheduler.shutdown();
     }
   }
 

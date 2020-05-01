@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -204,6 +205,19 @@ public class ListOffsetRequest extends AbstractRequest {
         }
 
         @Override
+        public boolean equals(Object obj) {
+            if (!(obj instanceof PartitionData)) return false;
+            PartitionData other = (PartitionData) obj;
+            return this.timestamp == other.timestamp &&
+                this.currentLeaderEpoch.equals(other.currentLeaderEpoch);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(timestamp, currentLeaderEpoch);
+        }
+
+        @Override
         public String toString() {
             StringBuilder bld = new StringBuilder();
             bld.append("{timestamp: ").append(timestamp).
@@ -269,12 +283,13 @@ public class ListOffsetRequest extends AbstractRequest {
             responseData.put(partition, partitionError);
         }
 
-        switch (version()) {
+        switch (versionId) {
             case 0:
             case 1:
             case 2:
             case 3:
             case 4:
+            case 5:
                 return new ListOffsetResponse(throttleTimeMs, responseData);
             default:
                 throw new IllegalArgumentException(String.format("Version %d is not valid. Valid versions for %s are 0 to %d",

@@ -24,7 +24,7 @@ from kafkatest.services.kafka import KafkaService, config_property
 from kafkatest.services.connect import ConnectDistributedService, VerifiableSource, VerifiableSink, ConnectRestError, MockSink, MockSource
 from kafkatest.services.console_consumer import ConsoleConsumer
 from kafkatest.services.security.security_config import SecurityConfig
-from kafkatest.version import DEV_BRANCH, LATEST_0_11_0, LATEST_0_10_2, LATEST_0_10_1, LATEST_0_10_0, LATEST_0_9, LATEST_0_8_2, KafkaVersion
+from kafkatest.version import DEV_BRANCH, LATEST_2_3, LATEST_2_2, LATEST_2_1, LATEST_2_0, LATEST_1_1, LATEST_1_0, LATEST_0_11_0, LATEST_0_10_2, LATEST_0_10_1, LATEST_0_10_0, LATEST_0_9, LATEST_0_8_2, KafkaVersion
 
 from collections import Counter, namedtuple
 import itertools
@@ -311,14 +311,9 @@ class ConnectDistributedTest(Test):
 
         self.cc.restart()
 
-        if connect_protocol == 'compatible':
-            timeout_sec = 120
-        else:
-            timeout_sec = 30
-
         # we should still be paused after restarting
         for node in self.cc.nodes:
-            wait_until(lambda: self.is_paused(self.source, node), timeout_sec=timeout_sec,
+            wait_until(lambda: self.is_paused(self.source, node), timeout_sec=120,
                        err_msg="Failed to see connector startup in PAUSED state")
 
     @cluster(num_nodes=6)
@@ -350,14 +345,9 @@ class ConnectDistributedTest(Test):
         # only processing new data.
         self.cc.restart()
 
-        if connect_protocol == 'compatible':
-            timeout_sec = 150
-        else:
-            timeout_sec = 70
-
         for node in self.cc.nodes:
             node.account.ssh("echo -e -n " + repr(self.SECOND_INPUTS) + " >> " + self.INPUT_FILE)
-        wait_until(lambda: self._validate_file_output(self.FIRST_INPUT_LIST + self.SECOND_INPUT_LIST), timeout_sec=timeout_sec, err_msg="Sink output file never converged to the same state as the input file")
+        wait_until(lambda: self._validate_file_output(self.FIRST_INPUT_LIST + self.SECOND_INPUT_LIST), timeout_sec=150, err_msg="Sink output file never converged to the same state as the input file")
 
     @cluster(num_nodes=6)
     @matrix(clean=[True, False], connect_protocol=['compatible', 'eager'])
@@ -528,17 +518,27 @@ class ConnectDistributedTest(Test):
 
     @cluster(num_nodes=5)
     @parametrize(broker_version=str(DEV_BRANCH), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
+    @parametrize(broker_version=str(LATEST_2_3), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
+    @parametrize(broker_version=str(LATEST_2_2), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
+    @parametrize(broker_version=str(LATEST_2_1), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
+    @parametrize(broker_version=str(LATEST_2_0), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
+    @parametrize(broker_version=str(LATEST_1_1), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
+    @parametrize(broker_version=str(LATEST_1_0), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
     @parametrize(broker_version=str(LATEST_0_11_0), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
     @parametrize(broker_version=str(LATEST_0_10_2), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
     @parametrize(broker_version=str(LATEST_0_10_1), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
     @parametrize(broker_version=str(LATEST_0_10_0), auto_create_topics=True, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
-    @parametrize(broker_version=str(LATEST_0_9), auto_create_topics=True, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='compatible')
     @parametrize(broker_version=str(DEV_BRANCH), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
+    @parametrize(broker_version=str(LATEST_2_3), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
+    @parametrize(broker_version=str(LATEST_2_2), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
+    @parametrize(broker_version=str(LATEST_2_1), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
+    @parametrize(broker_version=str(LATEST_2_0), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
+    @parametrize(broker_version=str(LATEST_1_1), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
+    @parametrize(broker_version=str(LATEST_1_0), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
     @parametrize(broker_version=str(LATEST_0_11_0), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
     @parametrize(broker_version=str(LATEST_0_10_2), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
     @parametrize(broker_version=str(LATEST_0_10_1), auto_create_topics=False, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
     @parametrize(broker_version=str(LATEST_0_10_0), auto_create_topics=True, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
-    @parametrize(broker_version=str(LATEST_0_9), auto_create_topics=True, security_protocol=SecurityConfig.PLAINTEXT, connect_protocol='eager')
     def test_broker_compatibility(self, broker_version, auto_create_topics, security_protocol, connect_protocol):
         """
         Verify that Connect will start up with various broker versions with various configurations. 
@@ -546,7 +546,7 @@ class ConnectDistributedTest(Test):
         or relies upon the broker to auto-create the topics (v0.10.0.x and before).
         """
         self.CONNECT_PROTOCOL = connect_protocol
-        self.setup_services(broker_version=broker_version, auto_create_topics=auto_create_topics, security_protocol=security_protocol)
+        self.setup_services(broker_version=KafkaVersion(broker_version), auto_create_topics=auto_create_topics, security_protocol=security_protocol)
         self.cc.set_configs(lambda node: self.render("connect-distributed.properties", node=node))
 
         self.cc.start()
